@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Payment;
+use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
@@ -19,64 +20,22 @@ class FinancialManagementController extends Controller
             'total_revenue' => Payment::where('status', 'completed')->sum('amount'),
             'monthly_revenue' => Payment::where('status', 'completed')
                 ->whereMonth('created_at', now()->month)
-                ->whereYear('created_at', now()->year)
                 ->sum('amount'),
             'active_subscriptions' => Subscription::where('status', 'active')->count(),
-            'pending_payments' => Payment::where('status', 'pending')->count(),
+            'total_users' => User::count(),
         ];
 
-        return view('admin.financial.index', compact('stats'));
-    }
+        $recentPayments = Payment::with('user')
+            ->latest()
+            ->take(10)
+            ->get();
 
-    public function transactions(Request $request)
-    {
-        $query = Payment::with(['user', 'subscription.plan']);
-
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
-        }
-
-        if ($request->filled('date_from')) {
-            $query->whereDate('created_at', '>=', $request->date_from);
-        }
-
-        if ($request->filled('date_to')) {
-            $query->whereDate('created_at', '<=', $request->date_to);
-        }
-
-        if ($request->filled('search')) {
-            $query->whereHas('user', function ($q) use ($request) {
-                $q->where('name', 'like', '%' . $request->search . '%')
-                  ->orWhere('email', 'like', '%' . $request->search . '%');
-            });
-        }
-
-        $transactions = $query->orderBy('created_at', 'desc')->paginate(20);
-
-        return view('admin.financial.transactions', compact('transactions'));
-    }
-
-    public function subscriptions(Request $request)
-    {
-        $query = Subscription::with(['user', 'plan']);
-
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
-        }
-
-        if ($request->filled('plan_id')) {
-            $query->where('subscription_plan_id', $request->plan_id);
-        }
-
-        $subscriptions = $query->orderBy('created_at', 'desc')->paginate(20);
-        $plans = SubscriptionPlan::all();
-
-        return view('admin.financial.subscriptions', compact('subscriptions', 'plans'));
+        return view('admin.financial.index', compact('stats', 'recentPayments'));
     }
 
     public function plans()
     {
-        $plans = SubscriptionPlan::withCount('subscriptions')->get();
+        $plans = Plan::orderBy('sort_order')->get();
         return view('admin.financial.plans', compact('plans'));
     }
 
@@ -87,105 +46,64 @@ class FinancialManagementController extends Controller
 
     public function storePlan(Request $request)
     {
-        $request->validate([
+        $validated = $request->validate([
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
             'price' => 'required|numeric|min:0',
-            'billing_cycle' => 'required|in:monthly,yearly',
-            'features' => 'required|array',
+            'currency' => 'required|string|size:3',
+            'billing_period' => 'required|in:monthly,yearly,lifetime',
+            'features' => 'nullable|array',
             'is_active' => 'boolean',
+            'is_featured' => 'boolean',
+            'sort_order' => 'integer|min:0',
         ]);
 
-        SubscriptionPlan::create([
-            'name' => $request->name,
-            'description' => $request->description,
-            'price' => $request->price,
-            'billing_cycle' => $request->billing_cycle,
-            'features' => $request->features,
-            'is_active' => $request->boolean('is_active', true),
-        ]);
+        Plan::create($validated);
 
         return redirect()->route('admin.financial.plans')
-            ->with('success', 'Subscription plan created successfully.');
+            ->with('success', 'Plan created successfully.');
     }
 
-    public function editPlan(SubscriptionPlan $plan)
+    public function editPlan(Plan $plan)
     {
         return view('admin.financial.edit-plan', compact('plan'));
     }
 
-    public function updatePlan(Request $request, SubscriptionPlan $plan)
+    public function updatePlan(Request $request, Plan $plan)
     {
-        $request->validate([
+        $validated = $request->validate([
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
             'price' => 'required|numeric|min:0',
-            'billing_cycle' => 'required|in:monthly,yearly',
-            'features' => 'required|array',
+            'currency' => 'required|string|size:3',
+            'billing_period' => 'required|in:monthly,yearly,lifetime',
+            'features' => 'nullable|array',
             'is_active' => 'boolean',
+            'is_featured' => 'boolean',
+            'sort_order' => 'integer|min:0',
         ]);
 
-        $plan->update([
-            'name' => $request->name,
-            'description' => $request->description,
-            'price' => $request->price,
-            'billing_cycle' => $request->billing_cycle,
-            'features' => $request->features,
-            'is_active' => $request->boolean('is_active'),
-        ]);
+        $plan->update($validated);
 
         return redirect()->route('admin.financial.plans')
-            ->with('success', 'Subscription plan updated successfully.');
+            ->with('success', 'Plan updated successfully.');
     }
 
-    public function revenueReport(Request $request)
+    public function transactions()
     {
-        $period = $request->get('period', 'monthly');
-        
-        $data = [];
-        
-        if ($period === 'monthly') {
-            $data = Payment::where('status', 'completed')
-                ->selectRaw('YEAR(created_at) as year, MONTH(created_at) as month, SUM(amount) as total')
-                ->groupBy('year', 'month')
-                ->orderBy('year', 'desc')
-                ->orderBy('month', 'desc')
-                ->limit(12)
-                ->get();
-        } else {
-            $data = Payment::where('status', 'completed')
-                ->selectRaw('YEAR(created_at) as year, SUM(amount) as total')
-                ->groupBy('year')
-                ->orderBy('year', 'desc')
-                ->limit(5)
-                ->get();
-        }
+        $transactions = Payment::with('user')
+            ->latest()
+            ->paginate(20);
 
-        return view('admin.financial.revenue-report', compact('data', 'period'));
+        return view('admin.financial.transactions', compact('transactions'));
     }
 
-    public function refundPayment(Request $request, Payment $payment)
+    public function subscriptions()
     {
-        $request->validate([
-            'reason' => 'required|string|max:500',
-        ]);
+        $subscriptions = Subscription::with(['user', 'plan'])
+            ->latest()
+            ->paginate(20);
 
-        // Update payment status
-        $payment->update([
-            'status' => 'refunded',
-            'refund_reason' => $request->reason,
-            'refunded_at' => now(),
-        ]);
-
-        // Cancel associated subscription if exists
-        if ($payment->subscription) {
-            $payment->subscription->update([
-                'status' => 'cancelled',
-                'cancelled_at' => now(),
-            ]);
-        }
-
-        return redirect()->back()
-            ->with('success', 'Payment refunded successfully.');
+        return view('admin.financial.subscriptions', compact('subscriptions'));
     }
 }
