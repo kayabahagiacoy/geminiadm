@@ -17,13 +17,13 @@ return Application::configure(basePath: dirname(__DIR__))
             'api.key' => \App\Http\Middleware\ApiKeyAuth::class,
             'api.rate' => \App\Http\Middleware\ApiRateLimit::class,
         ]);
-        
+
         // Disable CSRF for testing environment
-        // if (app()->environment('testing')) {
-        //     $middleware->validateCsrfTokens(except: [
-        //         '*'
-        //     ]);
-        // }
+        if (env('APP_ENV') === 'testing') {
+            $middleware->validateCsrfTokens(except: [
+                '*'
+            ]);
+        }
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
